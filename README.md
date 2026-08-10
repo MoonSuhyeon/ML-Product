@@ -2,8 +2,9 @@
 
 *Personal project*
 
-![Data / ML Engineering](https://img.shields.io/badge/Data%20%2F%20ML%20Engineering-0E1725?style=flat-square)
-![temporal correctness](https://img.shields.io/badge/temporal%20correctness-41506A?style=flat-square) ![feature engineering](https://img.shields.io/badge/feature%20engineering-41506A?style=flat-square) ![validation](https://img.shields.io/badge/validation-41506A?style=flat-square) ![leakage prevention](https://img.shields.io/badge/leakage%20prevention-41506A?style=flat-square)
+![Data / ML Engineering](https://img.shields.io/badge/Data%20%2F%20ML%20Engineering-0B1220?style=for-the-badge)
+
+![temporal correctness](https://img.shields.io/badge/temporal%20correctness-1D4ED8?style=for-the-badge) ![feature engineering](https://img.shields.io/badge/feature%20engineering-1D4ED8?style=for-the-badge) ![validation](https://img.shields.io/badge/validation-B45309?style=for-the-badge) ![leakage prevention](https://img.shields.io/badge/leakage%20prevention-BE123C?style=for-the-badge)
 
 In a hospitality marketplace, **hosts have to commit to prices and inventory
 before demand shows up.** Getting that wrong costs money in both directions —
