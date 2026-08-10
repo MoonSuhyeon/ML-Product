@@ -1,501 +1,164 @@
-# ML-Product
+# Demand Forecasting Without Leaking the Future
 
-> Airbnb형 숙박 플랫폼의 **지역·숙소별 예약 수요를 예측하고, 예측 결과를 가격·프로모션·재고 의사결정에 연결하는 ML 프로덕트**
+*Personal project*
 
-숙박 플랫폼의 예약 데이터를 기반으로 지역–숙소 단위의 미래 예약 수요를 예측합니다.
-모델 학습에서 끝내지 않고 **FastAPI 예측 서빙 · 성능 모니터링 · 재학습 트리거**까지 포함해, 서비스가 실제로 호출할 수 있는 형태로 만드는 것을 목표로 합니다.
+In a hospitality marketplace, **hosts have to commit to prices and inventory
+before demand shows up.** Getting that wrong costs money in both directions —
+empty rooms on a peak weekend, or a sold-out property priced too low.
+
+Forecasting looks like a standard time series problem until you notice that
+**bookings arrive before the stay.** Demand for August 15th is not a number that
+exists on August 15th; it accumulates for weeks beforehand. So the honest
+question is not "what will demand be" but **"what can I know about August 15th
+on August 1st, using only what has arrived by then?"**
+
+If you aggregate by stay date and stop there, bookings that have not been made
+yet end up inside your features. The model looks excellent and fails in
+production. That is lead-time leakage, and it is specific to this domain.
+
+I built a forecasting pipeline where **every feature is reconstructed as of the
+prediction moment, validation keeps a gap the size of the forecast horizon, and
+a test proves that adding future bookings does not change a single feature
+value.**
 
 ---
 
-## 1. Architecture
+## Architecture
 
-```text
-        Reservation DB (PostgreSQL)
-                  │
-                  ↓
-        [ Python ] ETL / Aggregation
-                  │
-                  ↓
-        as-of Feature Store  (숙박일 × 예측시점)
-                  │
-                  ↓
-        [ Python ] Training Pipeline
-          Baseline → RF → XGBoost → Quantile
-                  │
-                  ↓
-             Model Registry
-                  │
-                  ↓
-        [ FastAPI ] Forecast API
-          GET  /forecast
-          POST /backfill
-          GET  /metrics
-                  │
-        ┌─────────┼──────────┐
-        ↓         ↓          ↓
-     가격 전략   프로모션    재고 운영
-                  │
-                  ↓
-        [ Python ] Drift Monitor → 재학습 트리거
+```
+                    ┌──────────────────────────────────────┐
+                    │           RESERVATION LEDGER         │
+                    │                                      │
+                    │  booking_id · property_id · region   │
+                    │  stay_date  ·  booked_at  · price    │
+                    │                                      │
+                    │  booked_at ≤ stay_date  (invariant)  │
+                    └──────────────────┬───────────────────┘
+                                       │
+                                       ▼
+                    ┌──────────────────────────────────────┐
+                    │          PANEL BUILDER               │
+                    │                                      │
+                    │  property × stay_date full grid      │
+                    │  zero-demand days kept, not dropped  │
+                    └──────────────────┬───────────────────┘
+                                       │
+                                       ▼
+        ┌──────────────────────────────────────────────────────────┐
+        │                  AS-OF FEATURE STORE                     │
+        │              as_of = stay_date − horizon                 │
+        │                                                          │
+        │  ┌────────────────┐  ┌────────────────┐  ┌────────────┐  │
+        │  │ PICKUP         │  │ LAG            │  │ ROLLING    │  │
+        │  │ bookings       │  │ lag_7 · 14     │  │ mean 7·14  │  │
+        │  │ already in     │  │ lag_28         │  │ ·28 · std  │  │
+        │  │ at as_of       │  │ (k ≥ horizon)  │  │ shift-then │  │
+        │  └────────────────┘  └────────────────┘  └────────────┘  │
+        │                                                          │
+        │  ┌────────────────┐  ┌────────────────┐  ┌────────────┐  │
+        │  │ CALENDAR       │  │ PROPERTY       │  │ PRICE      │  │
+        │  │ dow · weekend  │  │ region · type  │  │ level      │  │
+        │  │ month · week   │  │ capacity·rating│  │ rel. to    │  │
+        │  └────────────────┘  └────────────────┘  │ regional μ │  │
+        │                                          └────────────┘  │
+        │                                                          │
+        │  guard: lag_k < horizon  →  ValueError                    │
+        └──────────────────────────┬───────────────────────────────┘
+                                   │
+              ┌────────────────────┴────────────────────┐
+              ▼                                         ▼
+    ┌────────────────────┐                ┌─────────────────────────┐
+    │      MODELS        │                │  WALK-FORWARD SPLIT     │
+    │                    │                │                         │
+    │ Seasonal Naive ◀───┼── reference    │  expanding window       │
+    │ Moving Average     │                │  5 folds × 28d valid    │
+    │ Weekday Mean       │                │                         │
+    │ Pickup Ratio       │                │  Train ██████ gap ░░    │
+    │  (needs as-of)     │                │              Valid ███  │
+    └─────────┬──────────┘                │  gap = horizon          │
+              │                           └────────────┬────────────┘
+              └────────────────┬───────────────────────┘
+                               ▼
+        ┌──────────────────────────────────────────────────────────┐
+        │                     EVALUATION                           │
+        │                                                          │
+        │  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐  │
+        │  │ WAPE  primary│  │ MAE · RMSE   │  │ MAPE  excluded │  │
+        │  │ Σ|y−ŷ| / Σ|y|│  │ secondary    │  │ diverges on    │  │
+        │  │              │  │              │  │ zero-demand    │  │
+        │  └──────────────┘  └──────────────┘  └────────────────┘  │
+        │                                                          │
+        │  per-fold variance · per-region · per-month              │
+        │  reports/  model_comparison · folds · error_by_region    │
+        └──────────────────────────────────────────────────────────┘
+
+        ┌──────────────────────────────────────────────────────────┐
+        │                    LEAKAGE TESTS                         │
+        │                                                          │
+        │  features(bookings ≤ cutoff) == features(all bookings)   │
+        │  pickup ≤ final demand · rolling excludes target day     │
+        │  folds never overlap · gap always applied                │
+        └──────────────────────────────────────────────────────────┘
+
+                    ┌──────────────────────────────────────┐
+                    │        SERVING  (planned)            │
+                    │  FastAPI /forecast · quantile band   │
+                    │  drift monitor → retrain trigger     │
+                    └──────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Implementation
+## Results
 
-숫자를 만들어내는 경로는 네 단계다.
+Synthetic reservation data — 83,861 bookings · 41 properties · 2 years.
+Walk-forward, 5 folds, horizon 7d, gap 6d.
 
-| 단계 | 구현 | 핵심 |
-|------|------|------|
-| **Feature** | `features/asof.py` | 모든 lag·rolling을 **예측 시점(as-of) 기준**으로 재구성. 학습과 서빙이 같은 코드를 공유해 skew를 없앤다 |
-| **Train** | `models/baseline.py` → `tree.py` → `quantile.py` | Seasonal Naive → RF → XGBoost → Quantile(q10·q50·q90) 순으로 올라간다 |
-| **Validate** | `evaluation/walkforward.py` | 학습·검증 사이에 예측 horizon만큼 **gap**을 두어 리드타임 누수를 차단 |
-| **Serve** | `serving/routers/forecast.py` | 배치 결과를 캐시에 적재하고 API는 조회만 한다 |
+| Model | WAPE | vs baseline |
+|---|---|---|
+| **Pickup Ratio** | **0.4486** | **+31.6%** |
+| Weekday Mean | 0.4908 | +25.2% |
+| Moving Average | 0.5710 | +13.0% |
+| Seasonal Naive *(baseline)* | 0.6562 | — |
 
-### Failure handling
+The strongest signal is **pickup** — how many bookings already exist at the
+prediction moment. It is the one feature that cannot be built without as-of
+logic, which is why the pipeline was built around it first.
 
-예측은 조용히 틀리는 게 가장 위험하다. 실패를 단계별로 드러낸다.
+Error is not uniform. It tracks sparsity:
 
-```text
-피처 결측 / 신규 숙소
-    ↓ retry — 지역·유형 평균으로 cold start 대체
-모델 로드 실패
-    ↓ fallback — Model Registry의 직전 버전으로 롤백
-예측값 이상 (음수·과거 대비 급등)
-    ↓ validation — 범위 검증 실패 시 Baseline 예측으로 대체
-WAPE 임계치 초과 (drift)
-    ↓ 재학습 트리거 → 실패 시 알림
-지속 악화
-    ↓ human review — 예측 사용 중단 여부 판단
+| Region | WAPE | zero-demand days |
+|---|---|---|
+| Seoul | 0.376 | 6.6% |
+| Jeju | 0.466 | 15.2% |
+| Gyeongju | 0.671 | 30.1% |
+
+Reporting only the 0.449 average hides Gyeongju. Sparse-demand handling is the
+next thing worth building, not a stronger learner.
+
+## Stack
+
+| | |
+|---|---|
+| Language | Python 3.11 |
+| Data | pandas · NumPy |
+| Modeling | scikit-learn (Poisson-family and GBDT planned) |
+| Testing | pytest — 16 tests, leakage guards included |
+| Reports | CSV under `reports/` |
+
+## Run locally
+
+```bash
+pip install -r requirements.txt
+pytest                        # 16 tests
+python scripts/run_baseline.py
 ```
 
-되돌릴 수 없는 결정(가격 자동 조정)에는 예측을 직접 연결하지 않는다. **예측은 구간과 함께 제공하고, 반영은 사람이 정한다.**
-
----
-
-## 3. Evaluation
-
-> Phase 0~3 구현 완료. 아래는 **실제 측정값**이다.
-> 재현: `python scripts/run_baseline.py` · 검증: `pytest` (16 tests)
-
-### 데이터
-
-| 항목 | 값 |
-|------|-----|
-| 예약 건수 | 83,861건 (숙소 41개 · 2024-01-01 ~ 2025-12-31) |
-| 평균 리드타임 | 10.8일 (중앙값 8일) |
-| 학습 패널 | 28,823행 (숙소 × 숙박일) |
-| **수요 0인 날 비중** | **13.1%** |
-
-수요 0인 날이 13.1%다. **MAPE를 주지표에서 뺀 근거가 여기서 나온다.**
-
-### 기준선 비교 — walk-forward 5-fold, horizon 7일, gap 6일
-
-| 모델 | WAPE | 표준편차 | 최악 fold | MAE | 기준선 대비 |
-|------|------|----------|-----------|-----|-------------|
-| **pickup_ratio** | **0.4486** | 0.0244 | 0.4936 | 1.191 | **+31.6%** |
-| weekday_mean | 0.4908 | 0.0231 | 0.5165 | 1.304 | +25.2% |
-| moving_average | 0.5710 | 0.0252 | 0.5965 | 1.518 | +13.0% |
-| seasonal_naive *(기준선)* | 0.6562 | 0.0260 | 0.6819 | 1.745 | — |
-
-가장 좋은 성적을 낸 `pickup_ratio`는 **예측 시점까지 이미 들어온 예약 수(booking pace)**를
-요일별 배수로 환산하는 방식이다. **as-of 피처링이 없으면 만들 수 없는 피처**이고,
-그것이 이 프로젝트에서 as-of 구조를 먼저 세운 이유다.
-
-### 폴드별 편차 — 평균만 보고하지 않는다
-
-| fold | 검증 구간 | WAPE | MAE |
-|------|-----------|------|-----|
-| 1 | 2025-08-14 ~ 09-10 | 0.4480 | 1.244 |
-| 2 | 2025-09-11 ~ 10-08 | 0.4389 | 1.166 |
-| 3 | 2025-10-09 ~ 11-05 | 0.4425 | 1.223 |
-| 4 | 2025-11-06 ~ 12-03 | **0.4936** | 1.203 |
-| 5 | 2025-12-04 ~ 12-31 | 0.4200 | 1.119 |
-
-### 세그먼트별 오차 — 전체 평균이 가리는 것
-
-| 지역 | WAPE | 수요 0 비중 |
-|------|------|-------------|
-| Seoul | 0.3759 | 6.6% |
-| Busan | 0.4239 | 9.6% |
-| Jeju | 0.4664 | 15.2% |
-| Gangneung | 0.6078 | 23.5% |
-| **Gyeongju** | **0.6707** | **30.1%** |
-
-전체 WAPE는 0.449지만 경주는 0.671이다. **수요가 희박한 지역일수록 오차가 크다**는 패턴이
-뚜렷하다. 전체 평균만 보고 "기준선 대비 31.6% 개선"이라고 보고하면 이 구간을 놓친다.
-Cold start(Phase 8)와 희소 수요 처리가 다음 우선순위인 이유다.
-
-### 남은 목표치
-
-| 항목 | 목표 | 상태 |
-|------|------|------|
-| 계층 합계 정합성 | 오차 < 1% | Phase 5 |
-| 예측 구간 적중률 | 80% ± 5%p | Phase 5 |
-| `GET /forecast` P95 | < 100 ms | Phase 6 |
-| Drift 감지 지연 | 1일 이내 | Phase 7 |
-
----
-
-## 4. Engineering Decisions
-
-| 결정 | 채택 | 이유와 대안 |
-|------|------|-------------|
-| 예측 시점 | **일 배치 + 조회 API** | 실시간 추론은 요청마다 피처를 조립해야 해 지연·비용이 크다. 숙박 수요는 분 단위로 바뀌지 않아 실시간성이 값을 하지 못한다 |
-| 피처 생성 | **as-of Feature Store 분리** | 학습과 서빙이 다른 피처 코드를 쓰면 skew가 생긴다. 시계열에서 이 어긋남은 곧 누수다 |
-| 모델 관리 | **Model Registry 경유** | 롤백할 수 없으면 drift 감지가 의미 없다. 되돌릴 수 있어야 자동 재학습을 켤 수 있다 |
-| 출력 형태 | **Quantile 3종** | 점추정만으로는 가격을 못 정한다. "18건"보다 "12~25건"이 의사결정에 쓰인다 |
-| 계층 처리 | **bottom-up reconciliation** | top-down은 지역 예측을 숙소로 배분하는데, 숙소별 편차가 큰 도메인에서 배분 가정이 깨진다 |
-| 주지표 | **WAPE (MAPE 제외)** | 숙소 단위는 예약 0건인 날이 흔해 MAPE가 발산한다 |
-
-### Trade-offs
-
-| 얻은 것 | 포기한 것 |
-|---------|-----------|
-| 조회 지연이 낮고 비용이 예측 가능하다 | **당일 급변에 대응하지 못한다.** 이벤트·대량 취소는 다음 배치까지 반영되지 않는다 |
-| 불확실성을 구간으로 전달한다 | 분위별 모델을 따로 학습해 **학습 시간이 3배** |
-| 운영 모델이 하나라 관리가 단순하다 | 숙소별 개별 모델 대비 **개별 최적화를 포기**했다 |
-| 계층 간 숫자가 어긋나지 않는다 | 지역 예측 품질이 **숙소 예측에 종속**된다 |
-| 누수 없는 검증을 보장한다 | gap 구간만큼 **학습 데이터가 줄어든다** |
-
----
-
-## 5. Operations
-
-> 테스트·배포·관측은 구현과 함께 붙인다. 아래는 **적용할 구성**이며, 현재 구축된 항목은 ✅로 표시했다.
-
-### Testing
-
-| 대상 | 검증 내용 |
-|------|-----------|
-| **누수 방지** | as-of 피처가 예측 시점 이후 데이터를 참조하지 않는지 — 가장 중요한 테스트 |
-| 지표 계산 | WAPE·MAE 구현이 수식과 일치하는지 (수요 0 구간 포함) |
-| 계층 정합성 | 숙소 예측 합계 = 지역 예측, 오차 < 1% |
-| 분할 로직 | walk-forward가 시점을 역전하지 않는지, gap이 정확히 적용되는지 |
-| 파이프라인 | 원천 데이터 → 피처 → 학습 → 예측 통합 실행 |
-
-### CI/CD
-
-```text
-push → ruff · black          코드 스타일
-     → pytest                단위 · 통합
-     → 누수 테스트 게이트      실패 시 머지 차단
-     → docker build          서빙 이미지
-```
-
-모델 **학습**은 CI에서 돌리지 않는다. 스케줄 워크플로로 분리하고, 산출물은 Model Registry에 등록한다.
-
-### Container
-
-`Dockerfile`(서빙) + `docker-compose.yml`(PostgreSQL · Forecast API · 배치 워커).
-학습 이미지와 서빙 이미지를 분리해 서빙 이미지에 학습 의존성이 들어가지 않게 한다.
-
-### Observability
-
-| 항목 | 노출 |
-|------|------|
-| 예측 API 지연 | Prometheus 히스토그램 (P50/P95/P99) |
-| 배치 소요 | 잡별 duration 게이지 |
-| **최근 WAPE** | 게이지 — drift 판단의 근거 |
-| 모델 버전 | 현재 서빙 중인 버전 라벨 |
-| 로그 | structlog JSON — 예측 요청에 model_version·as_of 포함 |
-
-### Scalability
-
-병목은 **배치 예측**이다. 숙소 × 날짜 곱으로 늘어난다.
-
-- 1차: 지역 단위로 파티셔닝해 병렬 학습·예측
-- 2차: 예측 결과 테이블을 날짜로 파티셔닝해 조회 성능 유지
-- 그 이상: 학습을 워커 큐로 분산
-
----
-
-## 문서 성격
-
-이 문서는 **구현 명세(Spec)** 입니다. 완성된 결과물이 아니라 만들어 가는 목표 상태를 기술합니다.
-각 항목의 진행 상태는 다음 표기로 구분합니다.
-
-| 표기 | 의미 |
-|------|------|
-| ✅ | 구현 완료 |
-| 🔨 | 진행 중 |
-| 🆕 | 예정 |
-
----
-
-## 목적
-
-```text
-예약 데이터
-    ↓
-수요 예측 모델
-    ↓
-지역 × 숙소 × 날짜 단위 예측
-    ↓
-가격 / 프로모션 / 재고 / 운영 의사결정
-```
-
-"모델 정확도"가 아니라 **의사결정에 쓸 수 있는 예측**을 만드는 것이 목표입니다.
-따라서 다음 세 가지를 함께 갖추는 것을 완료 조건으로 둡니다.
-
-1. 예측값뿐 아니라 **예측 구간**(불확실성)을 제공한다 — 가격 결정에는 점추정만으로 부족
-2. **FastAPI로 서빙**되어 다른 서비스가 호출할 수 있다
-3. 배포 후 **오차가 악화되면 감지**되고 재학습이 트리거된다
-
----
-
-## 문제 정의
-
-### 예측 대상
-
-```text
-지역 × 숙소 × 날짜  →  예상 예약 수요
-```
-
-숙박 도메인은 **날짜가 두 종류**라는 점이 예측 설계의 출발점입니다.
-
-| 기준 | 의미 | 용도 |
-|------|------|------|
-| **예약 생성일** (booking date) | 예약이 발생한 날 | 매출·마케팅 성과 |
-| **숙박일** (stay date) | 실제로 묵는 날 | 재고·가격·운영 |
-
-같은 데이터로 만들지만 **목표 변수가 다르고 누수 위험도 다릅니다.** 본 프로젝트는 숙박일 기준 수요를 주 타깃으로 하고, 예약 생성일 기준 수요를 보조 타깃으로 둡니다.
-
-### 리드타임 누수 (이 도메인의 핵심 함정) 🆕
-
-예약은 숙박일보다 **먼저** 발생합니다. 따라서 "8월 15일 숙박 수요"를 8월 1일 시점에 예측하려면, 8월 1일까지 들어온 예약만 써야 합니다.
-
-```text
-             예측 시점(as-of)          숙박일
-                  │                      │
-  ────────────────┼──────────────────────┼────────→
-                  │                      │
-   사용 가능       │   ← 이 구간의 예약은 아직 발생하지 않음 →
-   (관측된 예약)   │      학습에 쓰면 누수
-```
-
-단순히 숙박일 기준으로 집계하면 **미래에 들어올 예약까지 피처에 섞여 들어갑니다.**
-→ 모든 피처를 **as-of 시점 기준으로 재구성**해야 합니다. (Phase 2)
-
----
-
-## 기술 범위
-
-### 검증 설계 — 시간 순서 보존 🔨
-
-일반 Random Split을 쓰지 않고 **walk-forward 검증**을 사용합니다.
-또한 예측 시점과 숙박일 사이에 **gap**을 두어 리드타임 누수를 차단합니다.
-
-```text
-Past ──────────────────────────────────────→ Future
-
-Train              gap        Validation
-████████████████   ░░░░░      ██████
-                   ↑
-             예측 리드타임만큼 비움
-```
-
-| 항목 | 선택 | 이유 |
-|------|------|------|
-| 분할 방식 | `TimeSeriesSplit` (expanding window) | 시점 역전 방지 |
-| gap | 예측 horizon과 동일 | 리드타임 누수 차단 |
-| fold 수 | 5 | 계절 구간별 성능 편차 확인 |
-
-> 일반적인 누수 방지 원칙("`fit`은 학습 데이터에만, test에는 `transform`만")은 시계열에서 **시간 축으로 확장**됩니다. 스케일러뿐 아니라 집계·파생변수 전부가 as-of 시점을 넘어서면 안 됩니다.
-
-### Feature Engineering 🔨
-
-| 그룹 | 피처 | 비고 |
-|------|------|------|
-| **Lag** | `lag_1`, `lag_7`, `lag_14`, `lag_28` | as-of 시점 기준 |
-| **Rolling** | `rolling_mean_7/14/28`, `rolling_std_7` | 누수 방지 위해 shift 후 계산 |
-| **Calendar** | 요일, 주말, 월, 공휴일, 성수기 | 공휴일 테이블 별도 필요 🆕 |
-| **Property** | 지역, 숙소 유형, 수용 인원, 평점, 리뷰 수 | |
-| **Price** | 현재가, 지역 평균 대비 비율, 가격 변화율 | |
-| **Lead time** | 평균 예약 리드타임, 리드타임 분포 | 숙박 도메인 특화 🆕 |
-
-> 절대값보다 **상대값**이 신호가 강합니다. "1박 8만원"보다 "지역 평균 대비 0.7배"가 수요를 설명합니다. 비율 파생변수를 우선 설계합니다.
-
-### 평가 지표 🔨
-
-| Metric | 채택 여부 | 이유 |
-|--------|-----------|------|
-| **WAPE** | ✅ 주력 | 전체 예약량 기준. 숙소별 규모 차이를 흡수 |
-| **MAE** | ✅ 보조 | 절대 오차 감각 |
-| **RMSE** | ✅ 보조 | 성수기 큰 오차에 민감 |
-| **MAPE** | ⚠️ 제한적 | **수요 0인 날이 많아 발산** — 0 제외 구간에서만 참고 |
-| R² | ❌ | 시계열에서 해석력 낮음 |
-
-> MAPE를 주지표로 쓰지 않는 이유를 명시하는 것이 이 프로젝트의 판단 포인트입니다. 숙소 단위로 내려가면 예약 0건인 날이 흔합니다.
-
-### 모델 비교 🔨
-
-| 단계 | 모델 | 목적 |
-|------|------|------|
-| Baseline | Seasonal Naive (전주 동요일) | **이걸 못 이기면 의미 없음** |
-| Baseline | Moving Average | |
-| ML | Random Forest | 비선형·상호작용 포착 |
-| ML | XGBoost | 주력 |
-| 시계열 | statsmodels (SARIMA) | 단일 숙소 계절성 검증용 |
-
-> 모델 선택은 **교차검증 → 지표 표 → 선택 근거 기록** 순서를 고정합니다. 어떤 피처와 모델이 실제 성능 개선에 기여했는지를 실험 단위로 남기고, 기여가 확인되지 않은 피처는 채택하지 않습니다.
-
-### 예측 구간 🆕
-
-가격 결정에는 "18건 예상"보다 "12~25건 (80% 구간)"이 유용합니다.
-
-```text
-XGBoost Quantile Regression
-  ├── q=0.1  →  하한
-  ├── q=0.5  →  중앙 예측
-  └── q=0.9  →  상한
-```
-
-### 계층 예측 (Hierarchical) 🆕
-
-```text
-지역
- └── 숙소
-      └── 날짜
-```
-
-- 2계층(지역 → 숙소)으로 한정
-- **bottom-up reconciliation**만 구현 (숙소 예측 합계 = 지역 예측)
-- 검증: 계층 간 합계 정합성 오차 < 1%
-
-### Cold Start 🆕
-
-신규 숙소는 과거 예약 이력이 없어 lag 피처가 비어 있습니다.
-
-| 이력 | 전략 |
-|------|------|
-| 0일 | 지역 × 숙소 유형 × 수용 인원 평균 |
-| 1~28일 | 지역 평균과 자체 이력의 가중 혼합 (이력 길이에 비례) |
-| 28일+ | 일반 모델 |
-
-### 서빙 & 모니터링 🆕
-
-| 엔드포인트 | 설명 |
-|-----------|------|
-| `GET /forecast?region=&property_id=&start=&end=` | 예측 조회 (배치 결과 캐시) |
-| `POST /backfill` | 특정 기간 재예측 |
-| `GET /metrics` | 최근 예측 오차 추이 |
-| `GET /health` | 헬스체크 |
-
-**Drift 감지**: 최근 7일 WAPE가 학습 시점 대비 임계치 초과 → 재학습 트리거
-
----
-
-## 구현 로드맵
-
-| Phase | 산출물 | 착수 조건 |
-|-------|--------|-----------|
-| **0** | ✅  숙박 예약 더미 데이터 생성기 (지역·숙소·계절성·리드타임 반영) | — |
-| **1** | ✅  EDA 노트북 — 계절성·요일·지역별 수요 분포 확인 | Phase 0 |
-| **2** | ✅  as-of Feature Store 구축 (`features.py`) | Phase 1 |
-| **3** | ✅  Baseline(Seasonal Naive) + walk-forward 검증 프레임 | Phase 2 |
-| **4** | RF / XGBoost 학습 · 실험 비교표 | Phase 3 |
-| **5** | Quantile 예측 구간 + 계층 reconciliation | Phase 4 |
-| **6** | FastAPI 서빙 (`/forecast`, `/metrics`) | Phase 4 |
-| **7** | Drift 모니터 + 재학습 트리거 | Phase 6 |
-| **8** | Cold Start 대응 | Phase 5 |
-
-**Phase 3까지가 최소 완성선**입니다. Baseline을 이기는 모델과 누수 없는 검증 프레임이 있으면 프로젝트로서 성립합니다.
-
----
-
-## 완료 정의 (DoD)
-
-- [ ] Seasonal Naive Baseline 대비 WAPE 개선폭이 수치로 제시된다
-- [ ] walk-forward 검증에서 fold별 성능이 기록된다 (평균만 보고하지 않음)
-- [ ] as-of 피처링으로 리드타임 누수가 차단되었음을 테스트로 증명한다
-- [ ] `GET /forecast`가 예측값 + 80% 구간을 반환한다
-- [ ] 어떤 구간에서 예측이 실패하는지 Error Analysis가 문서화된다
-- [ ] 계층 합계 정합성 오차 < 1%
-
----
-
-## 기술 스택
-
-### 핵심 (Python / FastAPI)
-
-| 영역 | 기술 |
-|------|------|
-| 언어 | Python 3.11 |
-| API | **FastAPI**, Pydantic v2, Uvicorn |
-| 데이터 | pandas, NumPy |
-| ML | scikit-learn, XGBoost |
-| 시계열 | statsmodels |
-| DB | PostgreSQL, SQLAlchemy 2.0 (async), Alembic |
-| 배치 | APScheduler |
-| 테스트 | pytest |
-| 시각화 | Matplotlib, Plotly |
-| 개발 | Jupyter Notebook |
-
-### 선택
-
-- MLflow — 실험 추적 (Phase 4 이후 도입 검토)
-- Streamlit — 내부 예측 확인용 화면
-
----
-
-## 프로젝트 구조 (목표)
-
-```text
-ML-Product/
-├── notebooks/
-│   ├── 01_eda.ipynb
-│   ├── 02_feature_analysis.ipynb
-│   ├── 03_baseline.ipynb
-│   └── 04_model_comparison.ipynb
-├── src/
-│   ├── data/
-│   │   ├── generator.py        # 더미 예약 데이터 생성
-│   │   └── loader.py
-│   ├── features/
-│   │   ├── asof.py             # as-of 피처링 (핵심)
-│   │   ├── calendar.py
-│   │   └── price.py
-│   ├── models/
-│   │   ├── baseline.py
-│   │   ├── tree.py
-│   │   └── quantile.py
-│   ├── evaluation/
-│   │   ├── metrics.py          # WAPE 등
-│   │   ├── walkforward.py
-│   │   └── error_analysis.py
-│   ├── hierarchy/
-│   │   └── reconcile.py
-│   └── serving/
-│       ├── main.py             # FastAPI 진입점
-│       ├── routers/
-│       │   ├── forecast.py
-│       │   └── metrics.py
-│       └── schemas.py
-├── tests/
-├── reports/
-├── requirements.txt
-└── README.md
-```
-
----
-
-## 핵심 설계 원칙
-
-1. **시간 순서 보존** — 미래 정보가 학습에 섞이지 않도록 as-of 기준으로 피처를 만든다
-2. **Baseline 우선** — Seasonal Naive를 못 이기는 모델은 채택하지 않는다
-3. **Feature보다 검증** — 피처를 늘리기 전에 검증 프레임이 옳은지 확인한다
-4. **평균보다 세그먼트** — 전체 WAPE가 좋아도 특정 지역·신규 숙소에서 무너지면 실패로 본다
-5. **정확도보다 의사결정** — 점추정이 아니라 구간을 제공하고, API로 호출 가능해야 완성이다
-
----
-
-## 다른 레포와의 연결
-
-| 방향 | 내용 |
-|------|------|
-| **Data-Growth →** | 이벤트 데이터(검색·조회)를 선행 지표 피처로 수신 |
-| **→ Data-Growth** | 수요 예측 결과를 프로모션 실험 대상 선정에 제공 |
-| **→ RAG-Marketing** | 비수기 예상 숙소를 마케팅 콘텐츠 생성 대상으로 전달 |
-
-플랫폼 전체 구성은 [프로필 README](https://github.com/MoonSuhyeon)를 참고하세요.
+## Docs
+
+| | |
+|---|---|
+| `src/features/asof.py` | As-of featuring — the core of the project |
+| `src/evaluation/walkforward.py` | Fold construction and the gap |
+| `tests/test_asof_leakage.py` | Proof that future bookings change nothing |
+| `reports/` | Measured comparisons, per-fold and per-segment |
