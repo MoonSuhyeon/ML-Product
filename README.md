@@ -2,6 +2,9 @@
 
 *Personal project*
 
+![Data / ML Engineering](https://img.shields.io/badge/Data%20%2F%20ML%20Engineering-0E1725?style=flat-square)
+![temporal correctness](https://img.shields.io/badge/temporal%20correctness-41506A?style=flat-square) ![feature engineering](https://img.shields.io/badge/feature%20engineering-41506A?style=flat-square) ![validation](https://img.shields.io/badge/validation-41506A?style=flat-square) ![leakage prevention](https://img.shields.io/badge/leakage%20prevention-41506A?style=flat-square)
+
 In a hospitality marketplace, **hosts have to commit to prices and inventory
 before demand shows up.** Getting that wrong costs money in both directions —
 empty rooms on a peak weekend, or a sold-out property priced too low.
