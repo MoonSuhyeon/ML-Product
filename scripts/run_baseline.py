@@ -23,6 +23,7 @@ from src.evaluation import walkforward as wf                      # noqa: E402
 from src.evaluation.metrics import evaluate_by                    # noqa: E402
 from src.features.asof import DEFAULT_HORIZON, build_features, drop_warmup  # noqa: E402
 from src.models.baseline import BASELINES                         # noqa: E402
+from src.models.learned import LEARNED                            # noqa: E402
 
 REPORTS = ROOT / "reports"
 HORIZON = DEFAULT_HORIZON
@@ -58,13 +59,13 @@ def main() -> int:
 
     print()
     print("=" * 72)
-    print("기준선 비교")
+    print("모델 비교 — 기준선 4종 + 학습 모델 2종")
     summary_rows = []
     all_metrics = {}
     best_preds = None
     best_wape = float("inf")
 
-    for name, fn in BASELINES.items():
+    for name, fn in {**BASELINES, **LEARNED}.items():
         metrics, preds = wf.run(panel, fn, folds)
         s = wf.summarize(metrics)
         s["model"] = name

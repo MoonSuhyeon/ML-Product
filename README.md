@@ -25,7 +25,7 @@ prediction moment, validation keeps a gap the size of the forecast horizon, and
 a test proves that adding future bookings does not change a single feature
 value.**
 
-**WAPE 0.4486** · **+31.6%** over the seasonal baseline · **16 tests**, leakage guards included
+**WAPE 0.3276** · **+50.1%** over the seasonal baseline · **24 tests**, leakage guards included
 
 ---
 
@@ -121,8 +121,8 @@ value.**
 |---|---|
 | Language | Python 3.11 |
 | Data | pandas · NumPy |
-| Modeling | scikit-learn (Poisson-family and GBDT under evaluation) |
-| Testing | pytest — 16 tests, leakage guards included |
+| Modeling | scikit-learn — `PoissonRegressor` · `HistGradientBoostingRegressor(loss='poisson')` |
+| Testing | pytest — 24 tests, leakage guards included |
 | Reports | CSV under `reports/` |
 
 ---
@@ -142,25 +142,55 @@ model call, and the model runs once per day instead of once per request.
 **Costs** — same-day responsiveness. An event announcement or a wave of
 cancellations is not reflected until the next batch.
 
-### A rule beat the models, and it was kept
+### Matching the likelihood to the data, not scaling the learner
 
-Four candidates ran through the same walk-forward frame.
+The target is a daily booking count — small integers, 13% of them zero. Squared
+error does not assume that shape: it can predict negative demand and it weighs a
+miss near zero the same as a miss in peak season. So the first move was the
+objective, not the model size.
+
+Six candidates ran through the same walk-forward frame.
 
 | Model | WAPE | vs baseline |
 |---|---|---|
-| **Pickup Ratio** | **0.4486** | **+31.6%** |
+| **Poisson GBDT** | **0.3276** | **+50.1%** |
+| Poisson GLM | 0.3790 | +42.2% |
+| Pickup Ratio *(rule)* | 0.4486 | +31.6% |
 | Weekday Mean | 0.4908 | +25.2% |
 | Moving Average | 0.5710 | +13.0% |
 | Seasonal Naive *(baseline)* | 0.6562 | — |
 
-`pickup_ratio` converts bookings already received at the prediction moment into
-final demand. It cannot exist without as-of features, which is why the pipeline
-was built around them before any model was fitted.
+**Buys** — a correctly specified likelihood is worth more than a bigger model
+here. The linear Poisson GLM alone reaches +42.2%, ahead of every rule, and
+adding interactions on top of the same likelihood takes it to +50.1%.
+**Costs** — a model to train, version and watch for drift, where the rule had
+none. Prediction is no longer something you can read off a spreadsheet.
 
-**Buys** — no training step, no model artifact, no inference cost, and nothing
-that can drift. 31.6% over the seasonal baseline at zero operational weight.
-**Costs** — it cannot represent interactions, so it has a ceiling. A learned
-model is the next step, and it now has an honest number to beat.
+The rule is kept in the comparison rather than deleted. It is what makes the
++50.1% mean something, and `pickup_ratio` still needs no training at all — a
+useful fallback when a model cannot be served.
+
+### Improvement was uniform, but the sparsity gradient survived
+
+The acceptance test for the learned models was not the average. Error had been
+concentrated in sparse-demand regions, so a model that only improved the busy
+ones would not have been worth its operational weight.
+
+| Region | zero-demand days | Pickup Ratio | **Poisson GBDT** | improvement |
+|---|---|---|---|---|
+| Seoul | 6.6% | 0.3759 | **0.2758** | 26.6% |
+| Busan | 9.6% | 0.4239 | **0.3173** | 25.1% |
+| Jeju | 15.2% | 0.4664 | **0.3448** | 26.1% |
+| Gangneung | 23.5% | 0.6078 | **0.4125** | **32.1%** |
+| Gyeongju | 30.1% | 0.6707 | **0.4892** | 27.1% |
+
+**Buys** — every segment improved by 25–32%, and the largest gain landed on one
+of the sparsest regions rather than the easiest one.
+**Costs** — the ordering did not change. Gyeongju is still worst and still
+sparsest. The Poisson likelihood lifted the whole curve; it did not flatten it.
+Sparse-demand handling remains a separate problem, and the next thing worth
+building — cold start, pooling across similar properties — is still the same
+one it was before.
 
 ### WAPE as the primary metric, MAPE excluded
 
@@ -174,19 +204,13 @@ for a number that does not mislead.
 
 ### One global model instead of one per property
 
-**Buys** — a single artifact to operate rather than 41, and sparse properties
-borrow signal from the shared structure.
-**Costs** — per-property optimisation, and the cost is visible in the numbers.
-
-| Region | WAPE | zero-demand days |
-|---|---|---|
-| Seoul | 0.376 | 6.6% |
-| Jeju | 0.466 | 15.2% |
-| Gyeongju | 0.671 | 30.1% |
-
-Error tracks sparsity. Reporting only the 0.449 average hides Gyeongju, which is
-why per-segment error is part of the evaluation rather than an afterthought.
-Sparse-demand handling is the next thing worth building — not a stronger learner.
+**Buys** — a single artifact to train, version and serve rather than 41, and
+sparse properties borrow signal from the shared structure instead of fitting on
+their own thin history. Region and property type enter as features, so the model
+can still separate them.
+**Costs** — no per-property tuning. A property with an unusual pattern is
+averaged toward its neighbours, and the sparsity gradient above is the visible
+form of that trade.
 
 ### A gap inside the validation split
 
@@ -199,7 +223,7 @@ horizon are rejected outright rather than silently used.
 
 ```bash
 pip install -r requirements.txt
-pytest                        # 16 tests
+pytest                        # 24 tests
 python scripts/run_baseline.py
 ```
 
@@ -209,5 +233,6 @@ python scripts/run_baseline.py
 |---|---|
 | `src/features/asof.py` | As-of featuring — the core of the project |
 | `src/evaluation/walkforward.py` | Fold construction and the gap |
+| `src/models/learned.py` | Poisson GLM and GBDT — why the likelihood, not the size |
 | `tests/test_asof_leakage.py` | Proof that future bookings change nothing |
 | `reports/` | Measured comparisons, per-fold and per-segment |
