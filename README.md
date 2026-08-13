@@ -25,6 +25,8 @@ prediction moment, validation keeps a gap the size of the forecast horizon, and
 a test proves that adding future bookings does not change a single feature
 value.**
 
+**WAPE 0.4486** · **+31.6%** over the seasonal baseline · **16 tests**, leakage guards included
+
 ---
 
 ## Architecture
