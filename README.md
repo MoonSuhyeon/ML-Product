@@ -113,10 +113,36 @@ value.**
 
 ---
 
-## Results
+## Stack
 
-Synthetic reservation data — 83,861 bookings · 41 properties · 2 years.
-Walk-forward, 5 folds, horizon 7d, gap 6d.
+| | |
+|---|---|
+| Language | Python 3.11 |
+| Data | pandas · NumPy |
+| Modeling | scikit-learn (Poisson-family and GBDT under evaluation) |
+| Testing | pytest — 16 tests, leakage guards included |
+| Reports | CSV under `reports/` |
+
+---
+
+## Trade-offs
+
+Measured on synthetic reservation data — 83,861 bookings · 41 properties ·
+2 years · walk-forward 5 folds · horizon 7d · gap 6d.
+
+### Batch prediction instead of real-time inference
+
+Serving a forecast per request means assembling features per request. Demand for
+a stay date does not change minute to minute, so that cost buys nothing.
+
+**Buys** — serving becomes a cached lookup rather than feature assembly plus a
+model call, and the model runs once per day instead of once per request.
+**Costs** — same-day responsiveness. An event announcement or a wave of
+cancellations is not reflected until the next batch.
+
+### A rule beat the models, and it was kept
+
+Four candidates ran through the same walk-forward frame.
 
 | Model | WAPE | vs baseline |
 |---|---|---|
@@ -125,11 +151,30 @@ Walk-forward, 5 folds, horizon 7d, gap 6d.
 | Moving Average | 0.5710 | +13.0% |
 | Seasonal Naive *(baseline)* | 0.6562 | — |
 
-The strongest signal is **pickup** — how many bookings already exist at the
-prediction moment. It is the one feature that cannot be built without as-of
-logic, which is why the pipeline was built around it first.
+`pickup_ratio` converts bookings already received at the prediction moment into
+final demand. It cannot exist without as-of features, which is why the pipeline
+was built around them before any model was fitted.
 
-Error is not uniform. It tracks sparsity:
+**Buys** — no training step, no model artifact, no inference cost, and nothing
+that can drift. 31.6% over the seasonal baseline at zero operational weight.
+**Costs** — it cannot represent interactions, so it has a ceiling. A learned
+model is the next step, and it now has an honest number to beat.
+
+### WAPE as the primary metric, MAPE excluded
+
+13.1% of property-days have zero demand, and 30.1% in the sparsest region. MAPE
+divides by those.
+
+**Buys** — a metric that stays finite and weights by volume, so a busy property
+and a quiet one do not distort each other.
+**Costs** — MAPE is easier to explain to a non-technical reader. That was traded
+for a number that does not mislead.
+
+### One global model instead of one per property
+
+**Buys** — a single artifact to operate rather than 41, and sparse properties
+borrow signal from the shared structure.
+**Costs** — per-property optimisation, and the cost is visible in the numbers.
 
 | Region | WAPE | zero-demand days |
 |---|---|---|
@@ -137,18 +182,16 @@ Error is not uniform. It tracks sparsity:
 | Jeju | 0.466 | 15.2% |
 | Gyeongju | 0.671 | 30.1% |
 
-Reporting only the 0.449 average hides Gyeongju. Sparse-demand handling is the
-next thing worth building, not a stronger learner.
+Error tracks sparsity. Reporting only the 0.449 average hides Gyeongju, which is
+why per-segment error is part of the evaluation rather than an afterthought.
+Sparse-demand handling is the next thing worth building — not a stronger learner.
 
-## Stack
+### A gap inside the validation split
 
-| | |
-|---|---|
-| Language | Python 3.11 |
-| Data | pandas · NumPy |
-| Modeling | scikit-learn (Poisson-family and GBDT planned) |
-| Testing | pytest — 16 tests, leakage guards included |
-| Reports | CSV under `reports/` |
+**Buys** — leakage is prevented structurally, so the numbers above mean what they
+claim. A test asserts that adding future bookings changes no feature value.
+**Costs** — the gap removes training rows, and lag features shorter than the
+horizon are rejected outright rather than silently used.
 
 ## Run locally
 
