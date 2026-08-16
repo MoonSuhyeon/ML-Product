@@ -25,7 +25,7 @@ prediction moment, validation keeps a gap the size of the forecast horizon, and
 a test proves that adding future bookings does not change a single feature
 value.**
 
-**WAPE 0.3276** · **+50.1%** over the seasonal baseline · **24 tests**, leakage guards included
+**WAPE 0.3276** · **+50.1%** over the seasonal baseline · **32 tests**, leakage guards included
 
 ---
 
@@ -106,11 +106,19 @@ value.**
         │  folds never overlap · gap always applied                │
         └──────────────────────────────────────────────────────────┘
 
-                    ┌──────────────────────────────────────┐
-                    │        SERVING  (planned)            │
-                    │  FastAPI /forecast · quantile band   │
-                    │  drift monitor → retrain trigger     │
-                    └──────────────────────────────────────┘
+                    ┌──────────────────────────────────────────────┐
+                    │              SERVING  (FastAPI)              │
+                    │                                              │
+                    │  GET /forecast             with `as_of`      │
+                    │  GET /forecast/low-demand  → content agent   │
+                    │  GET /forecast/segments    per-region error  │
+                    │  GET /metrics              measured, not     │
+                    │                            recomputed        │
+                    │                                              │
+                    │  a read layer over the batch — no training   │
+                    │  happens on the request path                 │
+                    │  (planned: quantile band · drift monitor)    │
+                    └──────────────────────────────────────────────┘
 ```
 
 ---
@@ -122,8 +130,9 @@ value.**
 | Language | Python 3.11 |
 | Data | pandas · NumPy |
 | Modeling | scikit-learn — `PoissonRegressor` · `HistGradientBoostingRegressor(loss='poisson')` |
-| Testing | pytest — 24 tests, leakage guards included |
-| Reports | CSV under `reports/` |
+| Serving | FastAPI · Pydantic v2 — read-only over the batch |
+| Testing | pytest — 32 tests, leakage guards included |
+| Reports | CSV under `reports/` · `openapi.json` committed |
 
 ---
 
@@ -223,9 +232,16 @@ horizon are rejected outright rather than silently used.
 
 ```bash
 pip install -r requirements.txt
-pytest                        # 24 tests
-python scripts/run_baseline.py
+pytest                        # 32 tests
+python scripts/run_baseline.py   # measure: features → models → walk-forward
+
+uvicorn api.server:app --reload  # query the forecast at /docs
 ```
+
+The API does not train. `run_baseline.py` measures and writes `reports/`; the API
+fits the serving model once on first request and reads those reports for the model
+comparison. **`/metrics` says so in its own response** (`measured_by`), because a
+number that was measured offline should not look like one measured just now.
 
 ## Docs
 

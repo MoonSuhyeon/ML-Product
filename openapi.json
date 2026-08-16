@@ -1,0 +1,564 @@
+{
+  "components": {
+    "schemas": {
+      "ForecastResponse": {
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "horizon_days": {
+            "title": "Horizon Days",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ForecastRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "window_end": {
+            "format": "date",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date",
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "horizon_days",
+          "as_of",
+          "window_start",
+          "window_end",
+          "count",
+          "rows"
+        ],
+        "title": "ForecastResponse",
+        "type": "object"
+      },
+      "ForecastRow": {
+        "properties": {
+          "actual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
+          },
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string"
+          },
+          "predicted": {
+            "title": "Predicted",
+            "type": "number"
+          },
+          "property_id": {
+            "title": "Property Id",
+            "type": "string"
+          },
+          "property_type": {
+            "title": "Property Type",
+            "type": "string"
+          },
+          "region": {
+            "title": "Region",
+            "type": "string"
+          },
+          "stay_date": {
+            "format": "date",
+            "title": "Stay Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "property_id",
+          "region",
+          "property_type",
+          "stay_date",
+          "as_of",
+          "predicted"
+        ],
+        "title": "ForecastRow",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LowDemandResponse": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/LowDemandRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "threshold": {
+            "description": "이 값 미만을 낮은 수요로 본다",
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "required": [
+          "threshold",
+          "count",
+          "rows"
+        ],
+        "title": "LowDemandResponse",
+        "type": "object"
+      },
+      "LowDemandRow": {
+        "properties": {
+          "predicted": {
+            "title": "Predicted",
+            "type": "number"
+          },
+          "property_id": {
+            "title": "Property Id",
+            "type": "string"
+          },
+          "region": {
+            "title": "Region",
+            "type": "string"
+          },
+          "stay_date": {
+            "format": "date",
+            "title": "Stay Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "property_id",
+          "region",
+          "stay_date",
+          "predicted"
+        ],
+        "title": "LowDemandRow",
+        "type": "object"
+      },
+      "MetricsResponse": {
+        "properties": {
+          "baseline": {
+            "title": "Baseline",
+            "type": "string"
+          },
+          "measured_by": {
+            "title": "Measured By",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "serving": {
+            "title": "Serving",
+            "type": "string"
+          }
+        },
+        "required": [
+          "baseline",
+          "serving",
+          "measured_by",
+          "rows"
+        ],
+        "title": "MetricsResponse",
+        "type": "object"
+      },
+      "ModelRow": {
+        "properties": {
+          "folds": {
+            "title": "Folds",
+            "type": "integer"
+          },
+          "mae_mean": {
+            "title": "Mae Mean",
+            "type": "number"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "vs_baseline_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vs Baseline Pct"
+          },
+          "wape_mean": {
+            "title": "Wape Mean",
+            "type": "number"
+          },
+          "wape_std": {
+            "title": "Wape Std",
+            "type": "number"
+          },
+          "wape_worst": {
+            "title": "Wape Worst",
+            "type": "number"
+          }
+        },
+        "required": [
+          "model",
+          "wape_mean",
+          "wape_std",
+          "wape_worst",
+          "mae_mean",
+          "folds"
+        ],
+        "title": "ModelRow",
+        "type": "object"
+      },
+      "SegmentResponse": {
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model",
+          "note",
+          "rows"
+        ],
+        "title": "SegmentResponse",
+        "type": "object"
+      },
+      "SegmentRow": {
+        "properties": {
+          "mae": {
+            "title": "Mae",
+            "type": "number"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "region": {
+            "title": "Region",
+            "type": "string"
+          },
+          "rmse": {
+            "title": "Rmse",
+            "type": "number"
+          },
+          "wape": {
+            "title": "Wape",
+            "type": "number"
+          },
+          "zero_ratio": {
+            "title": "Zero Ratio",
+            "type": "number"
+          }
+        },
+        "required": [
+          "region",
+          "wape",
+          "mae",
+          "rmse",
+          "zero_ratio",
+          "n"
+        ],
+        "title": "SegmentRow",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "as-of 피처로 만든 숙박 수요 예측을 조회한다.",
+    "title": "Demand Forecast API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/forecast": {
+      "get": {
+        "operationId": "forecast_forecast_get",
+        "parameters": [
+          {
+            "description": "지역으로 거른다",
+            "in": "query",
+            "name": "region",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "지역으로 거른다",
+              "title": "Region"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 2000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Forecast",
+        "tags": [
+          "forecast"
+        ]
+      }
+    },
+    "/forecast/low-demand": {
+      "get": {
+        "description": "수요가 낮게 예측된 숙소·날짜.\n\n콘솔이 이걸 받아 콘텐츠 생성으로 넘긴다.",
+        "operationId": "low_demand_forecast_low_demand_get",
+        "parameters": [
+          {
+            "description": "이 값 미만을 낮은 수요로 본다",
+            "in": "query",
+            "name": "threshold",
+            "required": false,
+            "schema": {
+              "default": 1.0,
+              "description": "이 값 미만을 낮은 수요로 본다",
+              "minimum": 0,
+              "title": "Threshold",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "region",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Region"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LowDemandResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Low Demand",
+        "tags": [
+          "forecast"
+        ]
+      }
+    },
+    "/forecast/segments": {
+      "get": {
+        "description": "지역별 오차.\n\n전체 WAPE 만 보면 희박한 지역이 가려진다. 평균 뒤에 무엇이 숨어 있는지를\n같이 내보내는 게 이 프로젝트의 규칙이라 API 에서도 그대로 한다.",
+        "operationId": "segments_forecast_segments_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Segments",
+        "tags": [
+          "forecast"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Metrics",
+        "tags": [
+          "metrics"
+        ]
+      }
+    }
+  }
+}

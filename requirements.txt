@@ -2,8 +2,13 @@ pandas>=2.0
 numpy>=1.24
 scikit-learn>=1.3
 scipy>=1.10
-pytest>=8.0
 matplotlib>=3.7
-# Phase 4 이후
-# xgboost>=2.0
-# statsmodels>=0.14
+
+# 조회 API — 학습은 여기서 하지 않는다. 배치가 만든 결과를 보여준다.
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic>=2.9
+
+# 테스트
+pytest>=8.0
+httpx>=0.27
