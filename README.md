@@ -243,6 +243,13 @@ fits the serving model once on first request and reads those reports for the mod
 comparison. **`/metrics` says so in its own response** (`measured_by`), because a
 number that was measured offline should not look like one measured just now.
 
+The console that calls this API lives in
+[Data-Growth](https://github.com/MoonSuhyeon/Data-Growth) — one operator screen for four services rather than four
+separate UIs. It generates its TypeScript types from the `openapi.json` committed
+here, so a change to this schema breaks its build instead of silently rendering a
+wrong value.
+
+
 ## Docs
 
 | | |
