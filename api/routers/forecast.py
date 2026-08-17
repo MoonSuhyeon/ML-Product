@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from src.evaluation.metrics import evaluate_by
 from src.features.asof import DEFAULT_HORIZON
@@ -83,26 +83,40 @@ def low_demand(
     )
 
 
-@router.get("/segments", response_model=SegmentResponse)
-def segments() -> SegmentResponse:
-    """지역별 오차.
+# 쪼갤 수 있는 축. 패널에 있는 컬럼만 허용한다 — 임의 문자열을 그대로
+# `groupby` 에 넘기면 사용자가 KeyError 를 보게 된다.
+SEGMENT_DIMENSIONS = ("region", "property_type")
 
-    전체 WAPE 만 보면 희박한 지역이 가려진다. 평균 뒤에 무엇이 숨어 있는지를
+
+@router.get("/segments", response_model=SegmentResponse)
+def segments(
+    by: str = Query("region", description=f"쪼갤 축. {' | '.join(SEGMENT_DIMENSIONS)}"),
+) -> SegmentResponse:
+    """세그먼트별 오차.
+
+    전체 WAPE 만 보면 희박한 구간이 가려진다. 평균 뒤에 무엇이 숨어 있는지를
     같이 내보내는 게 이 프로젝트의 규칙이라 API 에서도 그대로 한다.
+
+    **축이 하나면 그 규칙이 반쪽이다.** 지역만 볼 수 있으면 특정 숙소 유형에서만
+    무너지는 모델을 지역 평균이 덮어 가린다. 그래서 축을 파라미터로 연다.
     """
-    by_region = evaluate_by(runtime.forecast, "region")
+    if by not in SEGMENT_DIMENSIONS:
+        raise HTTPException(400, f"쪼갤 수 없는 축입니다: {by}")
+
+    seg = evaluate_by(runtime.forecast, by)
     return SegmentResponse(
         model=SERVING_MODEL,
-        note="가장 최근 폴드 기준. 전체 평균 뒤에 가려지는 지역 편차를 드러낸다.",
+        dimension=by,
+        note="가장 최근 폴드 기준. 전체 평균 뒤에 가려지는 구간 편차를 드러낸다.",
         rows=[
             SegmentRow(
-                region=r.region,
+                key=str(getattr(r, by)),
                 wape=round(float(r.wape), 4),
                 mae=round(float(r.mae), 4),
                 rmse=round(float(r.rmse), 4),
                 zero_ratio=round(float(r.zero_ratio), 4),
                 n=int(r.n),
             )
-            for r in by_region.itertuples(index=False)
+            for r in seg.itertuples(index=False)
         ],
     )

@@ -69,13 +69,44 @@ def test_low_demand_is_sorted_and_below_threshold(client):
 
 def test_segments_expose_the_sparsity_gradient(client):
     """평균 뒤에 가려지는 지역 편차를 드러내야 한다."""
-    rows = client.get("/forecast/segments").json()["rows"]
+    body = client.get("/forecast/segments").json()
+    assert body["dimension"] == "region", "기본 축은 지역이다"
+    rows = body["rows"]
     assert len(rows) >= 3
     assert all(0 <= r["zero_ratio"] <= 1 for r in rows)
     # 오차가 가장 큰 지역이 수요 0 비중도 가장 높다 — 희소성 기울기
     worst = max(rows, key=lambda r: r["wape"])
     sparsest = max(rows, key=lambda r: r["zero_ratio"])
-    assert worst["region"] == sparsest["region"]
+    assert worst["key"] == sparsest["key"]
+
+
+def test_segments_can_be_cut_by_property_type(client):
+    """축이 하나뿐이면 "평균 뒤를 본다"는 주장이 반쪽이다.
+
+    지역만 볼 수 있으면 특정 숙소 유형에서만 무너지는 모델을 지역 평균이
+    덮어 가린다.
+    """
+    body = client.get("/forecast/segments", params={"by": "property_type"}).json()
+    assert body["dimension"] == "property_type"
+    keys = {r["key"] for r in body["rows"]}
+    assert len(keys) >= 3
+    assert "Seoul" not in keys, "지역이 섞여 나오면 축이 안 바뀐 것이다"
+
+
+def test_segments_reject_an_axis_that_is_not_in_the_panel(client):
+    """임의 문자열을 groupby 에 그대로 넘기면 사용자가 KeyError 를 본다."""
+    r = client.get("/forecast/segments", params={"by": "nonexistent"})
+    assert r.status_code == 400
+    assert "nonexistent" in r.json()["detail"]
+
+
+def test_every_dimension_covers_the_same_rows(client):
+    """축을 바꿔도 같은 예측을 쪼갠 것이어야 한다. 합이 다르면 필터가 섞인 것이다."""
+    totals = []
+    for by in ("region", "property_type"):
+        rows = client.get("/forecast/segments", params={"by": by}).json()["rows"]
+        totals.append(sum(r["n"] for r in rows))
+    assert totals[0] == totals[1]
 
 
 def test_metrics_say_where_the_numbers_came_from(client):

@@ -252,6 +252,10 @@
       },
       "SegmentResponse": {
         "properties": {
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
           "model": {
             "title": "Model",
             "type": "string"
@@ -270,6 +274,7 @@
         },
         "required": [
           "model",
+          "dimension",
           "note",
           "rows"
         ],
@@ -278,6 +283,10 @@
       },
       "SegmentRow": {
         "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
           "mae": {
             "title": "Mae",
             "type": "number"
@@ -285,10 +294,6 @@
           "n": {
             "title": "N",
             "type": "integer"
-          },
-          "region": {
-            "title": "Region",
-            "type": "string"
           },
           "rmse": {
             "title": "Rmse",
@@ -304,7 +309,7 @@
           }
         },
         "required": [
-          "region",
+          "key",
           "wape",
           "mae",
           "rmse",
@@ -496,8 +501,22 @@
     },
     "/forecast/segments": {
       "get": {
-        "description": "지역별 오차.\n\n전체 WAPE 만 보면 희박한 지역이 가려진다. 평균 뒤에 무엇이 숨어 있는지를\n같이 내보내는 게 이 프로젝트의 규칙이라 API 에서도 그대로 한다.",
+        "description": "세그먼트별 오차.\n\n전체 WAPE 만 보면 희박한 구간이 가려진다. 평균 뒤에 무엇이 숨어 있는지를\n같이 내보내는 게 이 프로젝트의 규칙이라 API 에서도 그대로 한다.\n\n**축이 하나면 그 규칙이 반쪽이다.** 지역만 볼 수 있으면 특정 숙소 유형에서만\n무너지는 모델을 지역 평균이 덮어 가린다. 그래서 축을 파라미터로 연다.",
         "operationId": "segments_forecast_segments_get",
+        "parameters": [
+          {
+            "description": "쪼갤 축. region | property_type",
+            "in": "query",
+            "name": "by",
+            "required": false,
+            "schema": {
+              "default": "region",
+              "description": "쪼갤 축. region | property_type",
+              "title": "By",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -508,6 +527,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Segments",

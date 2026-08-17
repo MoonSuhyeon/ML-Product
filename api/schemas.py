@@ -31,7 +31,10 @@ class ForecastResponse(BaseModel):
 
 
 class SegmentRow(BaseModel):
-    region: str
+    # 축 이름이 아니라 `key` 다. 예전에는 `region` 이었는데, 그러면 "평균 뒤에
+    # 가려지는 것을 드러낸다"는 주장이 축 하나에 묶인다. 지역만 볼 수 있는 도구는
+    # 숙소 유형별로 무너지는 모델을 못 잡는다.
+    key: str
     wape: float
     mae: float
     rmse: float
@@ -41,6 +44,8 @@ class SegmentRow(BaseModel):
 
 class SegmentResponse(BaseModel):
     model: str
+    # 어느 축으로 쪼갠 결과인지. 응답만 보고도 알 수 있어야 한다.
+    dimension: str
     note: str
     rows: list[SegmentRow]
 
