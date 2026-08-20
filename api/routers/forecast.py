@@ -61,22 +61,41 @@ def low_demand(
 ) -> LowDemandResponse:
     """수요가 낮게 예측된 숙소·날짜.
 
-    콘솔이 이걸 받아 콘텐츠 생성으로 넘긴다.
+    콘솔과 조정자가 이걸 받아 개입 대상으로 넘긴다.
+
+    **예측값과 그 구간의 오차를 같이 낸다.** 낮은 예측 하나만으로는 행동할 수
+    없다는 것을 스키마가 강제한다 — 소비자가 오차를 안 보고 결정하려면 필드를
+    일부러 무시해야 하고, 그건 코드에 흔적이 남는다.
+
+    거르지는 않는다. "WAPE 가 높으니 이 행은 빼자" 는 **소비자의 정책**이지
+    예측 서비스가 대신 정할 일이 아니다. 여기서 걸러 버리면 조정자는 자기가 무엇을
+    못 봤는지조차 모른다.
     """
     df = runtime.forecast
     if region:
         df = df[df["region"] == region]
     low = df[df["pred"] < threshold].sort_values("pred")
 
+    # 지역별 오차를 **예측과 같은 폴드에서** 잰다. 다른 구간에서 잰 값을 붙이면
+    # "이 예측이 얼마나 미더운가" 가 아니라 "예전에 얼마나 미더웠나" 가 된다.
+    seg = evaluate_by(runtime.forecast, "region")
+    wape_by = {str(r.region): float(r.wape) for r in seg.itertuples(index=False)}
+    n_by = {str(r.region): int(r.n) for r in seg.itertuples(index=False)}
+
     return LowDemandResponse(
         threshold=threshold,
         count=len(low),
+        measured_on=runtime.fold.valid_start.date(),
+        note="region_wape 가 null 이면 그 지역을 잴 표본이 없었다는 뜻이다 — 0 이 아니다.",
         rows=[
             LowDemandRow(
                 property_id=r.property_id,
                 region=r.region,
                 stay_date=r.stay_date.date(),
                 predicted=round(float(r.pred), 3),
+                region_wape=(round(wape_by[str(r.region)], 4)
+                             if str(r.region) in wape_by else None),
+                region_n=n_by.get(str(r.region), 0),
             )
             for r in low.head(limit).itertuples(index=False)
         ],

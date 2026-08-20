@@ -67,6 +67,50 @@ def test_low_demand_is_sorted_and_below_threshold(client):
     assert preds == sorted(preds)
 
 
+def test_low_demand_carries_the_error_for_that_region(client):
+    """**예측값만으로는 행동할 수 없다는 걸 스키마가 강제한다.**
+
+    이 응답의 소비자는 조정자다. "0.4개 예약" 만 받으면 그게 믿을 만한 0.4 인지
+    아닌지 알 방법이 없고, 그러면 가장 못 믿을 예측을 가장 자신 있게 실행하게
+    된다. 그 구간의 오차가 같이 실려야 자율성을 정할 수 있다.
+    """
+    body = client.get("/forecast/low-demand", params={"threshold": 0.8, "limit": 30}).json()
+    assert body["rows"], "이 임계값이면 행이 나와야 한다"
+    for r in body["rows"]:
+        assert "region_wape" in r, "오차 없이 예측만 내보내면 소비자가 판단할 근거가 없다"
+        assert "region_n" in r
+        if r["region_wape"] is not None:
+            assert r["region_wape"] >= 0
+            assert r["region_n"] > 0, "표본 없이 잰 WAPE 는 있을 수 없다"
+
+
+def test_the_error_matches_the_segments_endpoint(client):
+    """같은 폴드에서 잰 값이어야 한다.
+
+    다른 구간에서 잰 오차를 붙이면 "이 예측이 얼마나 미더운가" 가 아니라
+    "예전에 얼마나 미더웠나" 가 된다. 두 엔드포인트가 어긋나면 그 일이 일어난 것이다.
+    """
+    seg = {r["key"]: r["wape"]
+           for r in client.get("/forecast/segments", params={"by": "region"}).json()["rows"]}
+    for r in client.get("/forecast/low-demand", params={"limit": 50}).json()["rows"]:
+        if r["region_wape"] is not None:
+            assert r["region_wape"] == pytest.approx(seg[r["region"]], abs=1e-4)
+
+
+def test_a_high_error_region_is_not_filtered_out(client):
+    """거르는 건 소비자의 정책이다.
+
+    예측 서비스가 "WAPE 가 높으니 이 행은 빼자" 를 대신 정하면, 조정자는 자기가
+    무엇을 못 봤는지조차 모른다. 오차가 가장 큰 지역도 응답에 나와야 한다.
+    """
+    seg = client.get("/forecast/segments", params={"by": "region"}).json()["rows"]
+    worst = max(seg, key=lambda r: r["wape"])["key"]
+    body = client.get("/forecast/low-demand",
+                      params={"region": worst, "threshold": 1.0, "limit": 5}).json()
+    assert body["rows"], f"오차가 가장 큰 지역({worst})이 통째로 빠졌다"
+    assert all(r["region_wape"] is not None for r in body["rows"])
+
+
 def test_segments_expose_the_sparsity_gradient(client):
     """평균 뒤에 가려지는 지역 편차를 드러내야 한다."""
     body = client.get("/forecast/segments").json()
